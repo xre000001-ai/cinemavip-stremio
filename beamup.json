@@ -1,5 +1,4 @@
 {
-  "name": "cinemavip-stremio",
-  "description": "Cinema VIP Stream — Free movie & TV streams from 8 providers with native HLS",
-  "version": "1.0.0"
+    "projectName": "cinemavip-stremio",
+    "lastCommit": "9192a7f"
 }
