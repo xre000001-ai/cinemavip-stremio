@@ -1,5 +1,4 @@
 {
-  "name": "cinemavip",
-  "description": "Cinema VIP Stream — Free movie & TV streams with native HLS playback",
-  "version": "2.0.0"
+    "projectName": "cinemavip-stream",
+    "lastCommit": ""
 }
