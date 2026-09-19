@@ -1,68 +1,132 @@
 #!/usr/bin/env node
-// Cinema VIP Stream — Stremio addon
-// Native HLS (m3u8) via VaPlayer API for in-app playback
-// + 8 embed providers as browser fallbacks
-// Compatible with IMDb-based catalogs (Cinemeta, etc.)
+// Cinema VIP Stream — Stremio addon v3.0.0
+// Native HLS via VaPlayer API + VidSrc WASM decryption
+// All providers return m3u8 for in-app Stremio playback
+// Works with IMDb-based catalogs (Cinemeta, etc.)
 
 'use strict';
 
 import express from 'express';
 
 const app = express();
-const VERSION = '2.0.0';
+const VERSION = '3.0.0';
 const PORT = parseInt(process.env.PORT, 10) || 7000;
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
-const VA_API = 'https://streamdata.vaplayer.ru/api.php';
-const VA_ORIGIN = 'https://nextgencloudfabric.com';
 
-// ─── Stream ID parser ───────────────────────────────────────────────────────
-function parseStreamId(rawId) {
-  const decoded = decodeURIComponent(rawId).replace(/\.json$/, '');
-  const parts = decoded.split(':');
-  const imdbId = parts[0];
-  if (!imdbId || !imdbId.startsWith('tt')) return null;
+// ─── VidSrc WASM Decryption ─────────────────────────────────────────────────
+const wasmCache = { module: null, windowKey: null };
 
-  if (parts.length === 1) return { type: 'movie', imdbId };
-  if (parts.length === 3) {
-    const season = Number(parts[1]);
-    const episode = Number(parts[2]);
-    if (!Number.isFinite(season) || !Number.isFinite(episode)) return null;
-    return { type: 'series', imdbId, season, episode };
+async function decryptVidsrcStreams(encryptedB64, wasmUrl) {
+  try {
+    // Download and compile WASM (cached per window key)
+    const windowKey = wasmUrl.match(/w=(\d+)/)?.[1] || 'default';
+    if (!wasmCache.module || wasmCache.windowKey !== windowKey) {
+      const resp = await fetch(wasmUrl, {
+        signal: AbortSignal.timeout(8000),
+        headers: { 'User-Agent': UA },
+      });
+      if (!resp.ok) throw new Error(`WASM fetch failed: ${resp.status}`);
+      const wasmBytes = Buffer.from(await resp.arrayBuffer());
+      wasmCache.module = await WebAssembly.compile(wasmBytes);
+      wasmCache.windowKey = windowKey;
+    }
+
+    const inst = await WebAssembly.instantiate(wasmCache.module, {});
+    const ex = inst.exports;
+    const enc = Buffer.from(encryptedB64, 'base64');
+    const ptr = ex.alloc(enc.length);
+    new Uint8Array(ex.memory.buffer, ptr, enc.length).set(enc);
+    const outLen = ex.decrypt(ptr, enc.length);
+    const result = Buffer.from(ex.memory.buffer, ptr + 12, outLen).toString('utf8');
+    return result.split('\n').filter(s => s.trim());
+  } catch (e) {
+    console.error('VidSrc decrypt error:', e.message);
+    return [];
   }
-  return null;
+}
+
+// ─── VidSrc API — fetches encrypted m3u8 and decrypts via WASM ──────────────
+async function getVidsrcStreams(imdbId, type, season, episode) {
+  const streams = [];
+  try {
+    const apiType = type === 'series' ? 'tv' : 'movie';
+    let apiUrl = `https://data.vidsrc.sh/api.php?type=${apiType}&imdb=${imdbId}&stream_urls`;
+    if (type === 'series' && season && episode) {
+      apiUrl += `&season=${season}&episode=${episode}`;
+    }
+
+    const resp = await fetch(apiUrl, {
+      signal: AbortSignal.timeout(10000),
+      headers: {
+        'User-Agent': UA,
+        'Accept': 'application/json',
+        'Referer': 'https://cloudorchestranova.com/',
+      },
+    });
+    if (!resp.ok) return streams;
+
+    const data = await resp.json();
+    const encrypted = data?.data?.stream_urls;
+    const wasmUrl = data?.vs?.wasm_url;
+
+    if (typeof encrypted === 'string' && wasmUrl) {
+      const urls = await decryptVidsrcStreams(encrypted, wasmUrl);
+      for (let i = 0; i < urls.length; i++) {
+        streams.push({
+          name: `[ CinemaVIP ] 🎬 VidSrc HLS`,
+          title: `Server ${i + 1} · Plays in Stremio app`,
+          url: urls[i],
+          behaviorHints: {
+            notWebReady: false,
+            proxyHeaders: {
+              request: {
+                Referer: 'https://cloudorchestranova.com/',
+                'User-Agent': UA,
+              },
+            },
+          },
+        });
+      }
+    }
+  } catch (e) {
+    console.error('VidSrc failed:', e.message);
+  }
+  return streams;
 }
 
 // ─── VaPlayer API — direct m3u8 ─────────────────────────────────────────────
-async function getVaPlayerStreams(parsed) {
+const VA_API = 'https://streamdata.vaplayer.ru/api.php';
+const VA_ORIGIN = 'https://nextgencloudfabric.com';
+
+async function getVaPlayerStreams(imdbId, type, season, episode) {
   const streams = [];
   try {
-    const params = new URLSearchParams({ imdb: parsed.imdbId, type: parsed.type === 'series' ? 'tv' : 'movie' });
-    if (parsed.type === 'series') {
-      params.set('season', String(parsed.season));
-      params.set('episode', String(parsed.episode));
+    const params = new URLSearchParams({ imdb: imdbId, type: type === 'series' ? 'tv' : 'movie' });
+    if (type === 'series' && season && episode) {
+      params.set('season', String(season));
+      params.set('episode', String(episode));
     }
 
-    const referer = parsed.type === 'series'
-      ? `${VA_ORIGIN}/embed/tv/${parsed.imdbId}/${parsed.season}/${parsed.episode}`
-      : `${VA_ORIGIN}/embed/movie/${parsed.imdbId}`;
+    const referer = type === 'series'
+      ? `${VA_ORIGIN}/embed/tv/${imdbId}/${season}/${episode}`
+      : `${VA_ORIGIN}/embed/movie/${imdbId}`;
 
     const resp = await fetch(`${VA_API}?${params.toString()}`, {
       signal: AbortSignal.timeout(12000),
       headers: { 'User-Agent': UA, Referer: referer, Origin: VA_ORIGIN },
     });
-
     if (!resp.ok) return streams;
+
     const json = await resp.json();
     if (json.status_code !== '200' && json.status_code !== 200) return streams;
 
     const urls = json.data?.stream_urls || [];
     for (let i = 0; i < urls.length; i++) {
       streams.push({
-        name: '[ CinemaVIP ] ▶️ Native HLS',
-        title: `VaPlayer · Quality ${i + 1}\nPlays directly in Stremio app`,
+        name: `[ CinemaVIP ] ▶️ VaPlayer HLS`,
+        title: `Server ${i + 1} · Plays in Stremio app`,
         url: urls[i],
-        quality: 'Auto',
         behaviorHints: {
           notWebReady: false,
           proxyHeaders: {
@@ -108,12 +172,28 @@ const PROVIDERS = [
     : `https://vidlink.pro/movie/${p.imdbId}` },
 ];
 
+// ─── Stream ID parser ───────────────────────────────────────────────────────
+function parseStreamId(rawId) {
+  const decoded = decodeURIComponent(rawId).replace(/\.json$/, '');
+  const parts = decoded.split(':');
+  const imdbId = parts[0];
+  if (!imdbId || !imdbId.startsWith('tt')) return null;
+  if (parts.length === 1) return { type: 'movie', imdbId };
+  if (parts.length === 3) {
+    const season = Number(parts[1]);
+    const episode = Number(parts[2]);
+    if (!Number.isFinite(season) || !Number.isFinite(episode)) return null;
+    return { type: 'series', imdbId, season, episode };
+  }
+  return null;
+}
+
 // ─── Manifest ───────────────────────────────────────────────────────────────
 const MANIFEST = {
   id: 'com.cinemavip.stream',
   version: VERSION,
   name: 'Cinema VIP Stream',
-  description: 'Free movie & TV streams with native HLS playback + 8 embed providers. Works with all IMDb-based catalogs.',
+  description: 'Free movie & TV streams — all native HLS playback in Stremio app. VidSrc + VaPlayer WASM decryption. Works with all IMDb catalogs.',
   resources: ['stream'],
   types: ['movie', 'series'],
   idPrefixes: ['tt'],
@@ -122,7 +202,6 @@ const MANIFEST = {
 };
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
-
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', '*');
@@ -130,10 +209,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Manifest
 app.get('/manifest.json', (req, res) => res.json(MANIFEST));
 
-// Configure page
 app.get('/configure', (req, res) => {
   const host = req.headers.host || 'localhost';
   res.send(`<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -149,21 +226,14 @@ a.b{display:inline-block;background:#e50914;color:#fff;padding:14px 32px;border-
 .f b{color:#e6e9ef}.ft{font-size:12px;color:#444;margin-top:20px}
 .native{background:#1a3a1a;border-color:#2a5a2a}
 </style></head><body><div class="c">
-<h1>🎬 Cinema VIP Stream</h1>
-<p>Free movie &amp; TV streams with <b>native HLS playback</b> in Stremio app.<br>Works with all IMDb-based catalogs.</p>
+<h1>🎬 Cinema VIP Stream v${VERSION}</h1>
+<p><b>ALL streams play in Stremio app</b> — no browser needed.<br>VidSrc WASM + VaPlayer HLS decryption.</p>
 <div class="grid">
-<div class="f native"><b>▶️ Native HLS</b> — Plays in Stremio</div>
-<div class="f"><b>🎬 VidSrc.to</b> — Browser</div>
-<div class="f"><b>📺 VidSrc.me</b> — Browser</div>
-<div class="f"><b>🎞️ 2Embed</b> — Browser</div>
-<div class="f"><b>▶️ SuperEmbed</b> — Browser</div>
-<div class="f"><b>⚡ VidFast</b> — Browser</div>
-<div class="f"><b>🌐 EmbedSu</b> — Browser</div>
-<div class="f"><b>🎥 MoviesAPI</b> — Browser</div>
-<div class="f"><b>🔗 VidLink</b> — Browser</div>
+<div class="f native"><b>🎬 VidSrc HLS</b> — 3 servers</div>
+<div class="f native"><b>▶️ VaPlayer HLS</b> — 3 servers</div>
 </div>
 <a class="b" href="stremio://${host}/manifest.json">⬇️ Install in Stremio</a>
-<p class="ft">v${VERSION} · stream-only · IMDb compatible</p>
+<p class="ft">v${VERSION} · 6 native HLS streams · IMDb compatible</p>
 </div></body></html>`);
 });
 
@@ -176,20 +246,26 @@ app.get('/stream/:type/:id', async (req, res) => {
     const parsed = parseStreamId(id);
     if (!parsed || type !== parsed.type) return res.json({ streams: [] });
 
-    const streams = [];
+    const { imdbId, season, episode } = parsed;
 
-    // 1. Native HLS via VaPlayer (plays in Stremio app)
-    const vaStreams = await getVaPlayerStreams(parsed);
-    streams.push(...vaStreams);
+    // Run VidSrc and VaPlayer in parallel
+    const [vidsrcStreams, vaplayerStreams] = await Promise.all([
+      getVidsrcStreams(imdbId, type, season, episode),
+      getVaPlayerStreams(imdbId, type, season, episode),
+    ]);
 
-    // 2. Browser fallbacks (always included)
-    for (const p of PROVIDERS) {
-      streams.push({
-        name: `[ CinemaVIP ] ${p.name}`,
-        title: 'Opens in browser',
-        externalUrl: p.build(parsed),
-        behaviorHints: { notWebReady: true },
-      });
+    const streams = [...vidsrcStreams, ...vaplayerStreams];
+
+    // Browser fallbacks (only if no native streams found)
+    if (streams.length === 0) {
+      for (const p of PROVIDERS) {
+        streams.push({
+          name: `[ CinemaVIP ] ${p.name}`,
+          title: 'Opens in browser',
+          externalUrl: p.build(parsed),
+          behaviorHints: { notWebReady: true },
+        });
+      }
     }
 
     return res.json({ streams });
@@ -199,12 +275,10 @@ app.get('/stream/:type/:id', async (req, res) => {
   }
 });
 
-// Health
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', version: VERSION, uptime: Math.round(process.uptime()) });
 });
 
-// Root redirect
 app.get('/', (req, res) => res.redirect('/configure'));
 
 // ─── Start ──────────────────────────────────────────────────────────────────
