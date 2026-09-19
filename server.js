@@ -237,6 +237,66 @@ a.b{display:inline-block;background:#e50914;color:#fff;padding:14px 32px;border-
 </div></body></html>`);
 });
 
+// Debug endpoint
+app.get('/debug/:type/:id', async (req, res) => {
+  const { type, id } = req.params;
+  const parsed = parseStreamId(id);
+  if (!parsed) return res.json({ error: 'invalid id' });
+
+  const { imdbId, season, episode } = parsed;
+  const results = {};
+
+  // Test VidSrc API
+  try {
+    const apiType = type === 'series' ? 'tv' : 'movie';
+    let apiUrl = `https://data.vidsrc.sh/api.php?type=${apiType}&imdb=${imdbId}&stream_urls`;
+    if (type === 'series' && season && episode) apiUrl += `&season=${season}&episode=${episode}`;
+
+    const resp = await fetch(apiUrl, {
+      signal: AbortSignal.timeout(10000),
+      headers: { 'User-Agent': UA, 'Accept': 'application/json', Referer: 'https://cloudorchestranova.com/' },
+    });
+    const data = await resp.json();
+    results.vidsrc = {
+      status: data?.status_code,
+      hasStreamUrls: typeof data?.data?.stream_urls === 'string',
+      streamUrlsLen: typeof data?.data?.stream_urls === 'string' ? data.data.stream_urls.length : 0,
+      hasWasm: !!data?.vs?.wasm_url,
+      wasmUrl: data?.vs?.wasm_url || null,
+      dataKeys: Object.keys(data?.data || {}),
+    };
+
+    // Try decrypt
+    if (results.vidsrc.hasStreamUrls && results.vidsrc.hasWasm) {
+      try {
+        const urls = await decryptVidsrcStreams(data.data.stream_urls, data.vs.wasm_url);
+        results.vidsrc.decrypted = urls.length;
+        results.vidsrc.urls = urls.map(u => u.substring(0, 80));
+      } catch (e) {
+        results.vidsrc.decryptError = e.message;
+      }
+    }
+  } catch (e) {
+    results.vidsrcError = e.message;
+  }
+
+  // Test VaPlayer
+  try {
+    const params = new URLSearchParams({ imdb: imdbId, type: type === 'series' ? 'tv' : 'movie' });
+    if (type === 'series') { params.set('season', String(season)); params.set('episode', String(episode)); }
+    const resp = await fetch(`${VA_API}?${params}`, {
+      signal: AbortSignal.timeout(10000),
+      headers: { 'User-Agent': UA, Referer: `${VA_ORIGIN}/`, Origin: VA_ORIGIN },
+    });
+    const data = await resp.json();
+    results.vaplayer = { status: data?.status_code, streams: data?.data?.stream_urls?.length || 0 };
+  } catch (e) {
+    results.vaplayerError = e.message;
+  }
+
+  res.json(results);
+});
+
 // Stream endpoint
 app.get('/stream/:type/:id', async (req, res) => {
   try {
