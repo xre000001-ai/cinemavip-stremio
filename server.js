@@ -61,7 +61,7 @@ async function getVixSrcStreams(imdbId, type, season, episode) {
       : `https://vixsrc.to/api/movie/${imdbId}`;
 
     const apiResp = await fetch(apiUrl, {
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(15000),
       headers: { 'User-Agent': UA },
     });
     if (!apiResp.ok) return streams;
@@ -72,7 +72,7 @@ async function getVixSrcStreams(imdbId, type, season, episode) {
 
     // Step 2: Get masterPlaylist from embed page
     const embedResp = await fetch(`https://vixsrc.to${embedPath}`, {
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(15000),
       headers: { 'User-Agent': UA },
     });
     if (!embedResp.ok) return streams;
@@ -100,7 +100,7 @@ async function getVixSrcStreams(imdbId, type, season, episode) {
       url: hlsUrl,
       behaviorHints: { notWebReady: false },
     });
-  } catch (e) { console.error('VixSrc:', e.message); }
+  } catch (e) { console.error('VixSrc error:', e.message, e.stack); }
   return streams;
 }
 
