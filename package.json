@@ -1,0 +1,12 @@
+{
+  "name": "cinemavip-stremio",
+  "version": "1.0.0",
+  "description": "Cinema VIP Stream — Stremio addon (free embed providers)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
