@@ -220,3 +220,16 @@ app.get('/health', (req, res) => res.json({ status: 'ok', version: VERSION, upti
 app.get('/', (req, res) => res.redirect('/configure'));
 
 app.listen(PORT, '0.0.0.0', () => console.log(`Cinema VIP Stream v${VERSION} on :${PORT}`));
+// Debug endpoint for VixSrc
+app.get('/debug/vixsrc', async (req, res) => {
+  try {
+    const apiResp = await fetch('https://vixsrc.to/api/movie/tt0111161', {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': UA },
+    });
+    const apiData = await apiResp.json();
+    res.json({ apiStatus: apiResp.status, apiData });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
