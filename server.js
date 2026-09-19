@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Cinema VIP Stream — Stremio addon v4.0.0
+// Cinema VIP Stream — Stremio addon v4.0.1
 // VaPlayer: 3 native HLS (m3u8) — plays in Stremio app
 // VixSrc: 1 native HLS with subtitles — plays in Stremio app
 // 8 embed providers: browser fallbacks (externalUrl)
@@ -9,7 +9,7 @@
 import express from 'express';
 
 const app = express();
-const VERSION = '4.0.0';
+const VERSION = '4.0.1';
 const PORT = parseInt(process.env.PORT, 10) || 7000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
@@ -64,18 +64,18 @@ async function getVixSrcStreams(imdbId, type, season, episode) {
       signal: AbortSignal.timeout(15000),
       headers: { 'User-Agent': UA },
     });
-    if (!apiResp.ok) return streams;
+    if (!apiResp.ok) { console.log('VixSrc API HTTP:', apiResp.status); return streams; }
 
     const apiData = await apiResp.json();
     const embedPath = apiData?.src;
     if (!embedPath) return streams;
 
-    // Step 2: Get masterPlaylist from embed page
+    // Step 2: Get masterPlaylist from embed page (must use fresh token immediately)
     const embedResp = await fetch(`https://vixsrc.to${embedPath}`, {
       signal: AbortSignal.timeout(15000),
-      headers: { 'User-Agent': UA },
+      headers: { 'User-Agent': UA, Referer: 'https://vixsrc.to/', Origin: 'https://vixsrc.to' },
     });
-    if (!embedResp.ok) return streams;
+    if (!embedResp.ok) { console.log('VixSrc embed HTTP:', embedResp.status); return streams; }
 
     const html = await embedResp.text();
 
@@ -221,15 +221,3 @@ app.get('/', (req, res) => res.redirect('/configure'));
 
 app.listen(PORT, '0.0.0.0', () => console.log(`Cinema VIP Stream v${VERSION} on :${PORT}`));
 // Debug endpoint for VixSrc
-app.get('/debug/vixsrc', async (req, res) => {
-  try {
-    const apiResp = await fetch('https://vixsrc.to/api/movie/tt0111161', {
-      signal: AbortSignal.timeout(15000),
-      headers: { 'User-Agent': UA },
-    });
-    const apiData = await apiResp.json();
-    res.json({ apiStatus: apiResp.status, apiData });
-  } catch (e) {
-    res.json({ error: e.message });
-  }
-});
