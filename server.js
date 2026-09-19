@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Cinema VIP Stream — Stremio addon v3.2.0
+// Cinema VIP Stream — Stremio addon v4.0.0
 // VaPlayer: 3 native HLS (m3u8) — plays in Stremio app
+// VixSrc: 1 native HLS with subtitles — plays in Stremio app
 // 8 embed providers: browser fallbacks (externalUrl)
 
 'use strict';
@@ -8,7 +9,7 @@
 import express from 'express';
 
 const app = express();
-const VERSION = '3.2.0';
+const VERSION = '4.0.0';
 const PORT = parseInt(process.env.PORT, 10) || 7000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
@@ -40,13 +41,66 @@ async function getVaPlayerStreams(imdbId, type, season, episode) {
     const title = json.data?.title || '';
     for (let i = 0; i < urls.length; i++) {
       streams.push({
-        name: `[ CinemaVIP ] ▶️ Server ${i + 1}`,
+        name: `[ CinemaVIP ] ▶️ VaPlayer ${i + 1}`,
         title: `${title}\nHLS · Plays in Stremio app`,
         url: urls[i],
         behaviorHints: { notWebReady: false },
       });
     }
   } catch (e) { console.error('VaPlayer:', e.message); }
+  return streams;
+}
+
+// ─── VixSrc API — HLS with subtitles ────────────────────────────────────────
+async function getVixSrcStreams(imdbId, type, season, episode) {
+  const streams = [];
+  try {
+    // Step 1: Get embed path from VixSrc API
+    const apiUrl = type === 'series'
+      ? `https://vixsrc.to/api/tv/${imdbId}/${season}/${episode}`
+      : `https://vixsrc.to/api/movie/${imdbId}`;
+
+    const apiResp = await fetch(apiUrl, {
+      signal: AbortSignal.timeout(10000),
+      headers: { 'User-Agent': UA },
+    });
+    if (!apiResp.ok) return streams;
+
+    const apiData = await apiResp.json();
+    const embedPath = apiData?.src;
+    if (!embedPath) return streams;
+
+    // Step 2: Get masterPlaylist from embed page
+    const embedResp = await fetch(`https://vixsrc.to${embedPath}`, {
+      signal: AbortSignal.timeout(10000),
+      headers: { 'User-Agent': UA },
+    });
+    if (!embedResp.ok) return streams;
+
+    const html = await embedResp.text();
+
+    // Extract masterPlaylist URL, token, and expires from the HTML
+    const urlMatch = html.match(/url:\s*'([^']+)'/);
+    const tokenMatch = html.match(/'token':\s*'([^']+)'/);
+    const expiresMatch = html.match(/'expires':\s*'([^']+)'/);
+
+    if (!urlMatch || !tokenMatch || !expiresMatch) return streams;
+
+    const playlistUrl = urlMatch[1];
+    const token = tokenMatch[1];
+    const expires = expiresMatch[1];
+
+    // Build the final HLS URL
+    const separator = playlistUrl.includes('?') ? '&' : '?';
+    const hlsUrl = `${playlistUrl}${separator}token=${token}&expires=${expires}&h=1`;
+
+    streams.push({
+      name: `[ CinemaVIP ] 🎬 VixSrc`,
+      title: `VixSrc HLS\nMulti-audio + subtitles · Plays in Stremio app`,
+      url: hlsUrl,
+      behaviorHints: { notWebReady: false },
+    });
+  } catch (e) { console.error('VixSrc:', e.message); }
   return streams;
 }
 
@@ -82,7 +136,7 @@ const MANIFEST = {
   id: 'com.cinemavip.stream',
   version: VERSION,
   name: 'Cinema VIP Stream',
-  description: 'Free movies & TV — 3 native HLS servers play in Stremio app + 8 browser fallbacks. IMDb compatible.',
+  description: 'Free movies & TV — 4 native HLS servers (VaPlayer + VixSrc) play in Stremio app + 8 browser fallbacks. IMDb compatible.',
   resources: ['stream'],
   types: ['movie', 'series'],
   idPrefixes: ['tt'],
@@ -118,10 +172,10 @@ a.b{display:inline-block;background:#e50914;color:#fff;padding:14px 32px;border-
 <h1>🎬 Cinema VIP Stream v${VERSION}</h1>
 <p>Free movies &amp; TV shows</p>
 <div class="g">
-<div class="i h"><b>▶️ Server 1</b><br>HLS · Stremio app</div>
-<div class="i h"><b>▶️ Server 2</b><br>HLS · Stremio app</div>
-<div class="i h"><b>▶️ Server 3</b><br>HLS · Stremio app</div>
+<div class="i h"><b>▶️ VaPlayer 1-3</b><br>HLS · Stremio app</div>
+<div class="i h"><b>🎬 VixSrc</b><br>HLS + subtitles · Stremio app</div>
 <div class="i"><b>🌐 8 Providers</b><br>Browser fallback</div>
+<div class="i"><b>📊 11 Total</b><br>4 native + 8 fallback</div>
 </div>
 <a class="b" href="stremio://${host}/manifest.json">⬇️ Install in Stremio</a>
 <p class="ft">v${VERSION} · IMDb compatible · zero bandwidth</p>
@@ -139,9 +193,14 @@ app.get('/stream/:type/:id', async (req, res) => {
     const { imdbId, season, episode } = parsed;
     const streams = [];
 
-    // Native HLS via VaPlayer
-    const vaStreams = await getVaPlayerStreams(imdbId, type, season, episode);
+    // Fetch native HLS sources in parallel
+    const [vaStreams, vixStreams] = await Promise.all([
+      getVaPlayerStreams(imdbId, type, season, episode),
+      getVixSrcStreams(imdbId, type, season, episode),
+    ]);
+
     streams.push(...vaStreams);
+    streams.push(...vixStreams);
 
     // Browser fallbacks
     for (const p of PROVIDERS) {
