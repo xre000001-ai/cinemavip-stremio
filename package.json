@@ -1,6 +1,6 @@
 {
   "name": "cinemavip-stremio",
-  "version": "2.0.0",
+  "version": "3.1.0",
   "type": "module",
   "description": "Cinema VIP Stream — Stremio addon with native HLS + 8 embed providers",
   "main": "server.js",
