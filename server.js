@@ -209,7 +209,11 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/manifest.json', (req, res) => res.json(MANIFEST));
+app.get('/manifest.json', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.json(MANIFEST);
+});
 
 app.get('/configure', (req, res) => {
   const host = req.headers.host || 'localhost';
@@ -346,3 +350,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Cinema VIP Stream v${VERSION} on :${PORT}`);
 });// v3.0.0 deployed
 // rebuild Sat Sep 19 19:31:31 UTC 2026
+// redeploy Sat Sep 19 20:15:22 UTC 2026
