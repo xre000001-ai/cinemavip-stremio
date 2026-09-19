@@ -285,3 +285,4 @@ app.get('/', (req, res) => res.redirect('/configure'));
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Cinema VIP Stream v${VERSION} on :${PORT}`);
 });// v3.0.0 deployed
+// rebuild Sat Sep 19 19:31:31 UTC 2026
