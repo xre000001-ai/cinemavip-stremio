@@ -190,7 +190,7 @@ function parseStreamId(rawId) {
 
 // ─── Manifest ───────────────────────────────────────────────────────────────
 const MANIFEST = {
-  id: 'com.cinemavip.stream',
+  id: 'com.cinemavip.stream.v3',
   version: VERSION,
   name: 'Cinema VIP Stream',
   description: 'Free movie & TV streams — all native HLS playback in Stremio app. VidSrc + VaPlayer WASM decryption. Works with all IMDb catalogs.',
