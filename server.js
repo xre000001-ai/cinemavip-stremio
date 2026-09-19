@@ -53,6 +53,7 @@ async function getVaPlayerStreams(imdbId, type, season, episode) {
 
 // ─── VixSrc API — HLS with subtitles ────────────────────────────────────────
 async function getVixSrcStreams(imdbId, type, season, episode) {
+  console.log("VixSrc: Starting for", imdbId, type);
   const streams = [];
   try {
     // Step 1: Get embed path from VixSrc API
