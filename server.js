@@ -9,7 +9,7 @@
 import express from 'express';
 
 const app = express();
-const VERSION = '5.0.0';
+const VERSION = '5.0.1';
 const PORT = parseInt(process.env.PORT, 10) || 7000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
@@ -60,6 +60,29 @@ function getVixCacheKey(imdbId, type, season, episode) {
   return `movie:${imdbId}`;
 }
 
+// VixSrc proxy (Cloudflare Worker) — set VIXSRC_PROXY env var
+const VIXSRC_PROXY = process.env.VIXSRC_PROXY || '';
+
+async function vixFetch(url) {
+  // Try direct first (works on residential IPs)
+  try {
+    const r = await fetch(url, {
+      signal: AbortSignal.timeout(5000),
+      headers: { 'User-Agent': UA, Referer: 'https://vixsrc.to/', Origin: 'https://vixsrc.to' },
+    });
+    if (r.ok) return r;
+  } catch {}
+  // Fallback to proxy (works on cloud/datacenter IPs)
+  if (VIXSRC_PROXY) {
+    try {
+      const proxyUrl = `${VIXSRC_PROXY}?url=${encodeURIComponent(url)}`;
+      const r = await fetch(proxyUrl, { signal: AbortSignal.timeout(10000) });
+      if (r.ok) return r;
+    } catch {}
+  }
+  return null;
+}
+
 async function getVixSrcStreams(imdbId, type, season, episode) {
   const streams = [];
   const cacheKey = getVixCacheKey(imdbId, type, season, episode);
@@ -77,27 +100,21 @@ async function getVixSrcStreams(imdbId, type, season, episode) {
   }
 
   try {
-    // Step 1: Get embed path from VixSrc API
+    // Step 1: Get embed path from VixSrc API (direct or via proxy)
     const apiUrl = type === 'series'
       ? `https://vixsrc.to/api/tv/${imdbId}/${season}/${episode}`
       : `https://vixsrc.to/api/movie/${imdbId}`;
 
-    const apiResp = await fetch(apiUrl, {
-      signal: AbortSignal.timeout(10000),
-      headers: { 'User-Agent': UA },
-    });
-    if (!apiResp.ok) return streams;
+    const apiResp = await vixFetch(apiUrl);
+    if (!apiResp) return streams;
 
     const apiData = await apiResp.json();
     const embedPath = apiData?.src;
     if (!embedPath) return streams;
 
-    // Step 2: Get masterPlaylist from embed page
-    const embedResp = await fetch(`https://vixsrc.to${embedPath}`, {
-      signal: AbortSignal.timeout(10000),
-      headers: { 'User-Agent': UA, Referer: 'https://vixsrc.to/', Origin: 'https://vixsrc.to' },
-    });
-    if (!embedResp.ok) return streams;
+    // Step 2: Get masterPlaylist from embed page (direct or via proxy)
+    const embedResp = await vixFetch(`https://vixsrc.to${embedPath}`);
+    if (!embedResp) return streams;
 
     const html = await embedResp.text();
 
@@ -260,15 +277,3 @@ app.listen(PORT, '0.0.0.0', () => {
   prewarmVixSrc();
 });
 // Debug: test VixSrc from beamup
-app.get('/debug/vixsrc', async (req, res) => {
-  try {
-    const r1 = await fetch('https://vixsrc.to/api/movie/tt0111161', {
-      signal: AbortSignal.timeout(10000),
-      headers: { 'User-Agent': UA },
-    });
-    const body = await r1.text();
-    res.json({ status: r1.status, body: body.slice(0, 300) });
-  } catch (e) {
-    res.json({ error: e.message });
-  }
-});
