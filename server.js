@@ -259,3 +259,16 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Cinema VIP Stream v${VERSION} on :${PORT}`);
   prewarmVixSrc();
 });
+// Debug: test VixSrc from beamup
+app.get('/debug/vixsrc', async (req, res) => {
+  try {
+    const r1 = await fetch('https://vixsrc.to/api/movie/tt0111161', {
+      signal: AbortSignal.timeout(10000),
+      headers: { 'User-Agent': UA },
+    });
+    const body = await r1.text();
+    res.json({ status: r1.status, body: body.slice(0, 300) });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
