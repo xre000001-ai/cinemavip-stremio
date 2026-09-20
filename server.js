@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// Cinema VIP Stream — Stremio addon v4.0.2
+// Cinema VIP Stream — Stremio addon v4.1.0
 // VaPlayer: 3 native HLS (m3u8) — plays in Stremio app
-// VixSrc: 1 native HLS with subtitles — cached for 60 days
 // 8 embed providers: browser fallbacks (externalUrl)
 
 'use strict';
@@ -9,7 +8,7 @@
 import express from 'express';
 
 const app = express();
-const VERSION = '4.0.2';
+const VERSION = '4.1.0';
 const PORT = parseInt(process.env.PORT, 10) || 7000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
@@ -41,92 +40,13 @@ async function getVaPlayerStreams(imdbId, type, season, episode) {
     const title = json.data?.title || '';
     for (let i = 0; i < urls.length; i++) {
       streams.push({
-        name: `[ CinemaVIP ] ▶️ VaPlayer ${i + 1}`,
+        name: `[ CinemaVIP ] ▶️ Server ${i + 1}`,
         title: `${title}\nHLS · Plays in Stremio app`,
         url: urls[i],
         behaviorHints: { notWebReady: false },
       });
     }
   } catch (e) { console.error('VaPlayer:', e.message); }
-  return streams;
-}
-
-// ─── VixSrc API — HLS with subtitles (cached) ──────────────────────────────
-// Cache VixSrc playlist URLs — the masterPlaylist token lasts ~60 days
-const vixSrcCache = new Map(); // key: "type:imdbId[:s:e]" → { url, expires }
-const VIX_CACHE_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
-
-function getVixCacheKey(imdbId, type, season, episode) {
-  if (type === 'series') return `tv:${imdbId}:${season}:${episode}`;
-  return `movie:${imdbId}`;
-}
-
-async function getVixSrcStreams(imdbId, type, season, episode) {
-  const streams = [];
-  const cacheKey = getVixCacheKey(imdbId, type, season, episode);
-  
-  // Check cache first
-  const cached = vixSrcCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < VIX_CACHE_TTL) {
-    streams.push({
-      name: `[ CinemaVIP ] 🎬 VixSrc`,
-      title: `VixSrc HLS\nMulti-audio + subtitles · Plays in Stremio app`,
-      url: cached.url,
-      behaviorHints: { notWebReady: false },
-    });
-    return streams;
-  }
-  
-  try {
-    // Step 1: Get embed path from VixSrc API
-    const apiUrl = type === 'series'
-      ? `https://vixsrc.to/api/tv/${imdbId}/${season}/${episode}`
-      : `https://vixsrc.to/api/movie/${imdbId}`;
-
-    const apiResp = await fetch(apiUrl, {
-      signal: AbortSignal.timeout(10000),
-      headers: { 'User-Agent': UA },
-    });
-    if (!apiResp.ok) { console.log('VixSrc API HTTP:', apiResp.status, apiUrl); return streams; }
-
-    const apiData = await apiResp.json();
-    const embedPath = apiData?.src;
-    if (!embedPath) { console.log('VixSrc: no embed path, response:', JSON.stringify(apiData).slice(0, 200)); return streams; }
-
-    // Step 2: Get masterPlaylist from embed page (token valid ~10s, must be fast!)
-    const embedResp = await fetch(`https://vixsrc.to${embedPath}`, {
-      signal: AbortSignal.timeout(8000),
-      headers: { 'User-Agent': UA, Referer: 'https://vixsrc.to/', Origin: 'https://vixsrc.to' },
-    });
-    if (!embedResp.ok) { console.log('VixSrc embed HTTP:', embedResp.status); return streams; }
-
-    const html = await embedResp.text();
-
-    // Extract masterPlaylist URL, token, and expires
-    const urlMatch = html.match(/url:\s*'([^']+)'/);
-    const tokenMatch = html.match(/'token':\s*'([^']+)'/);
-    const expiresMatch = html.match(/'expires':\s*'([^']+)'/);
-
-    if (!urlMatch || !tokenMatch || !expiresMatch) { console.log('VixSrc: regex failed, html:', html.slice(0, 200)); return streams; }
-
-    const playlistUrl = urlMatch[1];
-    const token = tokenMatch[1];
-    const expires = expiresMatch[1];
-
-    // Build the final HLS URL
-    const separator = playlistUrl.includes('?') ? '&' : '?';
-    const hlsUrl = `${playlistUrl}${separator}token=${token}&expires=${expires}&h=1`;
-
-    // Cache it (token lasts ~60 days)
-    vixSrcCache.set(cacheKey, { url: hlsUrl, ts: Date.now() });
-
-    streams.push({
-      name: `[ CinemaVIP ] 🎬 VixSrc`,
-      title: `VixSrc HLS\nMulti-audio + subtitles · Plays in Stremio app`,
-      url: hlsUrl,
-      behaviorHints: { notWebReady: false },
-    });
-  } catch (e) { /* VixSrc may fail silently — VaPlayer still works */ }
   return streams;
 }
 
@@ -162,7 +82,7 @@ const MANIFEST = {
   id: 'com.cinemavip.stream',
   version: VERSION,
   name: 'Cinema VIP Stream',
-  description: 'Free movies & TV — 4 native HLS servers (VaPlayer + VixSrc) play in Stremio app + 8 browser fallbacks. IMDb compatible.',
+  description: 'Free movies & TV — 3 native HLS servers play in Stremio app + 8 browser fallbacks. IMDb compatible.',
   resources: ['stream'],
   types: ['movie', 'series'],
   idPrefixes: ['tt'],
@@ -198,10 +118,8 @@ a.b{display:inline-block;background:#e50914;color:#fff;padding:14px 32px;border-
 <h1>🎬 Cinema VIP Stream v${VERSION}</h1>
 <p>Free movies &amp; TV shows</p>
 <div class="g">
-<div class="i h"><b>▶️ VaPlayer 1-3</b><br>HLS · Stremio app</div>
-<div class="i h"><b>🎬 VixSrc</b><br>HLS + subtitles · Stremio app</div>
+<div class="i h"><b>▶️ Server 1-3</b><br>HLS · Stremio app</div>
 <div class="i"><b>🌐 8 Providers</b><br>Browser fallback</div>
-<div class="i"><b>📊 12 Total</b><br>4 native + 8 fallback</div>
 </div>
 <a class="b" href="stremio://${host}/manifest.json">⬇️ Install in Stremio</a>
 <p class="ft">v${VERSION} · IMDb compatible · zero bandwidth</p>
@@ -219,14 +137,9 @@ app.get('/stream/:type/:id', async (req, res) => {
     const { imdbId, season, episode } = parsed;
     const streams = [];
 
-    // Fetch native HLS sources in parallel
-    const [vaStreams, vixStreams] = await Promise.all([
-      getVaPlayerStreams(imdbId, type, season, episode),
-      getVixSrcStreams(imdbId, type, season, episode),
-    ]);
-
+    // Native HLS via VaPlayer
+    const vaStreams = await getVaPlayerStreams(imdbId, type, season, episode);
     streams.push(...vaStreams);
-    streams.push(...vixStreams);
 
     // Browser fallbacks
     for (const p of PROVIDERS) {
@@ -245,18 +158,4 @@ app.get('/stream/:type/:id', async (req, res) => {
 app.get('/health', (req, res) => res.json({ status: 'ok', version: VERSION, uptime: Math.round(process.uptime()) }));
 app.get('/', (req, res) => res.redirect('/configure'));
 
-// Pre-warm VixSrc cache on startup
-async function prewarmVixSrc() {
-  console.log('Pre-warming VixSrc cache...');
-  const streams = await getVixSrcStreams('tt0111161', 'movie');
-  if (streams.length > 0) {
-    console.log('VixSrc cache warmed successfully');
-  } else {
-    console.log('VixSrc pre-warm failed (will retry on first request)');
-  }
-}
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Cinema VIP Stream v${VERSION} on :${PORT}`);
-  prewarmVixSrc();
-});
+app.listen(PORT, '0.0.0.0', () => console.log(`Cinema VIP Stream v${VERSION} on :${PORT}`));
