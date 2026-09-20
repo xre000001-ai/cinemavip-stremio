@@ -9,7 +9,7 @@
 import express from 'express';
 
 const app = express();
-const VERSION = '5.1.0';
+const VERSION = '5.2.0';
 const PORT = parseInt(process.env.PORT, 10) || 7000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
@@ -53,8 +53,8 @@ async function getVaPlayerStreams(imdbId, type, season, episode) {
 
 // ─── VixSrc API — HLS with multi-audio + subtitles ─────────────────────────
 // VIXSRC_PROXY: comma-separated Cloudflare Worker URLs for fallback
-// Example: VIXSRC_PROXY=https://w1.workers.dev,https://w2.workers.dev
-const VIX_PROXIES = (process.env.VIXSRC_PROXY || '')
+// Hardcoded CF Workers (ready for when VixSrc stops blocking CF IPs)
+const VIX_PROXIES = (process.env.VIXSRC_PROXY || 'https://cinemavip-proxy1.xre000001.workers.dev,https://cinemavip-proxy2.xre000001.workers.dev,https://cinemavip-proxy3.xre000001.workers.dev')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
