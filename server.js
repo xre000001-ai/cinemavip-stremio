@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Cinema VIP Stream — Stremio addon v5.0.0
+// Cinema VIP Stream — Stremio addon v5.1.0
 // VaPlayer: 3 native HLS (m3u8) — plays in Stremio app
-// VixSrc: 1 native HLS with multi-audio + subtitles — plays in Stremio app
+// VixSrc: 1 native HLS with multi-audio + subtitles (via proxy fallback)
 // 8 embed providers: browser fallbacks (externalUrl)
 
 'use strict';
@@ -9,7 +9,7 @@
 import express from 'express';
 
 const app = express();
-const VERSION = '5.0.1';
+const VERSION = '5.1.0';
 const PORT = parseInt(process.env.PORT, 10) || 7000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
@@ -52,6 +52,13 @@ async function getVaPlayerStreams(imdbId, type, season, episode) {
 }
 
 // ─── VixSrc API — HLS with multi-audio + subtitles ─────────────────────────
+// VIXSRC_PROXY: comma-separated Cloudflare Worker URLs for fallback
+// Example: VIXSRC_PROXY=https://w1.workers.dev,https://w2.workers.dev
+const VIX_PROXIES = (process.env.VIXSRC_PROXY || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
 const vixSrcCache = new Map();
 const VIX_CACHE_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -60,9 +67,8 @@ function getVixCacheKey(imdbId, type, season, episode) {
   return `movie:${imdbId}`;
 }
 
-// VixSrc proxy (Cloudflare Worker) — set VIXSRC_PROXY env var
-const VIXSRC_PROXY = process.env.VIXSRC_PROXY || '';
-
+// Try fetching VixSrc URL — direct first, then round-robin proxies
+let proxyIndex = 0;
 async function vixFetch(url) {
   // Try direct first (works on residential IPs)
   try {
@@ -72,12 +78,18 @@ async function vixFetch(url) {
     });
     if (r.ok) return r;
   } catch {}
-  // Fallback to proxy (works on cloud/datacenter IPs)
-  if (VIXSRC_PROXY) {
+
+  // Try each proxy in round-robin
+  for (let i = 0; i < VIX_PROXIES.length; i++) {
+    const idx = (proxyIndex + i) % VIX_PROXIES.length;
+    const proxy = VIX_PROXIES[idx];
     try {
-      const proxyUrl = `${VIXSRC_PROXY}?url=${encodeURIComponent(url)}`;
+      const proxyUrl = `${proxy}?url=${encodeURIComponent(url)}`;
       const r = await fetch(proxyUrl, { signal: AbortSignal.timeout(10000) });
-      if (r.ok) return r;
+      if (r.ok) {
+        proxyIndex = (idx + 1) % VIX_PROXIES.length; // rotate
+        return r;
+      }
     } catch {}
   }
   return null;
@@ -100,7 +112,7 @@ async function getVixSrcStreams(imdbId, type, season, episode) {
   }
 
   try {
-    // Step 1: Get embed path from VixSrc API (direct or via proxy)
+    // Step 1: Get embed path from VixSrc API
     const apiUrl = type === 'series'
       ? `https://vixsrc.to/api/tv/${imdbId}/${season}/${episode}`
       : `https://vixsrc.to/api/movie/${imdbId}`;
@@ -112,7 +124,7 @@ async function getVixSrcStreams(imdbId, type, season, episode) {
     const embedPath = apiData?.src;
     if (!embedPath) return streams;
 
-    // Step 2: Get masterPlaylist from embed page (direct or via proxy)
+    // Step 2: Get masterPlaylist from embed page
     const embedResp = await vixFetch(`https://vixsrc.to${embedPath}`);
     if (!embedResp) return streams;
 
@@ -129,11 +141,11 @@ async function getVixSrcStreams(imdbId, type, season, episode) {
     const token = tokenMatch[1];
     const expires = expiresMatch[1];
 
-    // Build the final HLS URL — NO ?b=1 (triggers block), just token params
+    // Build HLS URL — NO ?b=1 (triggers Cloudflare block)
     const separator = playlistUrl.includes('?') ? '&' : '?';
     const hlsUrl = `${playlistUrl}${separator}token=${token}&expires=${expires}`;
 
-    // Cache it (token lasts ~60 days)
+    // Cache it
     vixSrcCache.set(cacheKey, { url: hlsUrl, ts: Date.now() });
 
     streams.push({
@@ -201,6 +213,9 @@ app.get('/manifest.json', (req, res) => {
 
 app.get('/configure', (req, res) => {
   const host = req.headers.host;
+  const proxyStatus = VIX_PROXIES.length > 0
+    ? `<div class="i h"><b>🛡️ Proxy</b><br>${VIX_PROXIES.length} worker(s) active</div>`
+    : `<div class="i"><b>⚠️ No Proxy</b><br>VixSrc needs residential IP</div>`;
   res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Cinema VIP Stream</title>
 <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,sans-serif;background:#0a0a0b;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
@@ -216,7 +231,7 @@ a.b{display:inline-block;background:#e50914;color:#fff;padding:14px 32px;border-
 <div class="g">
 <div class="i h"><b>▶️ VaPlayer 1-3</b><br>HLS · Stremio app</div>
 <div class="i h"><b>🎬 VixSrc</b><br>HLS + subtitles · Stremio app</div>
-<div class="i"><b>🌐 8 Providers</b><br>Browser fallback</div>
+${proxyStatus}
 <div class="i"><b>📊 12 Total</b><br>4 native + 8 fallback</div>
 </div>
 <a class="b" href="stremio://${host}/manifest.json">⬇️ Install in Stremio</a>
@@ -258,7 +273,7 @@ app.get('/stream/:type/:id', async (req, res) => {
   } catch (e) { console.error('Stream:', e.message); return res.json({ streams: [] }); }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: VERSION, uptime: Math.round(process.uptime()) }));
+app.get('/health', (req, res) => res.json({ status: 'ok', version: VERSION, proxies: VIX_PROXIES.length, uptime: Math.round(process.uptime()) }));
 app.get('/', (req, res) => res.redirect('/configure'));
 
 // Pre-warm VixSrc cache on startup
@@ -274,6 +289,6 @@ async function prewarmVixSrc() {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Cinema VIP Stream v${VERSION} on :${PORT}`);
+  console.log(`VixSrc proxies: ${VIX_PROXIES.length || 'none (direct only)'}`);
   prewarmVixSrc();
 });
-// Debug: test VixSrc from beamup
