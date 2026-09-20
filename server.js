@@ -87,18 +87,18 @@ async function getVixSrcStreams(imdbId, type, season, episode) {
       signal: AbortSignal.timeout(10000),
       headers: { 'User-Agent': UA },
     });
-    if (!apiResp.ok) return streams;
+    if (!apiResp.ok) { console.log('VixSrc API HTTP:', apiResp.status, apiUrl); return streams; }
 
     const apiData = await apiResp.json();
     const embedPath = apiData?.src;
-    if (!embedPath) return streams;
+    if (!embedPath) { console.log('VixSrc: no embed path, response:', JSON.stringify(apiData).slice(0, 200)); return streams; }
 
     // Step 2: Get masterPlaylist from embed page (token valid ~10s, must be fast!)
     const embedResp = await fetch(`https://vixsrc.to${embedPath}`, {
       signal: AbortSignal.timeout(8000),
       headers: { 'User-Agent': UA, Referer: 'https://vixsrc.to/', Origin: 'https://vixsrc.to' },
     });
-    if (!embedResp.ok) return streams;
+    if (!embedResp.ok) { console.log('VixSrc embed HTTP:', embedResp.status); return streams; }
 
     const html = await embedResp.text();
 
@@ -107,7 +107,7 @@ async function getVixSrcStreams(imdbId, type, season, episode) {
     const tokenMatch = html.match(/'token':\s*'([^']+)'/);
     const expiresMatch = html.match(/'expires':\s*'([^']+)'/);
 
-    if (!urlMatch || !tokenMatch || !expiresMatch) return streams;
+    if (!urlMatch || !tokenMatch || !expiresMatch) { console.log('VixSrc: regex failed, html:', html.slice(0, 200)); return streams; }
 
     const playlistUrl = urlMatch[1];
     const token = tokenMatch[1];
